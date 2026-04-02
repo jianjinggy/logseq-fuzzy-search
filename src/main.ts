@@ -14,7 +14,11 @@ function updateSelection(resultsList: HTMLUListElement) {
 }
 
 function openResult(result: SearchResult) {
-  logseq.Editor.scrollToBlockInPage(result.pageName, result.uuid);
+  if (result.kind === 'page' || !result.uuid) {
+    logseq.App.pushState('page', { name: result.pageName });
+  } else {
+    logseq.Editor.scrollToBlockInPage(result.pageName, result.uuid);
+  }
   logseq.hideMainUI();
 }
 
@@ -38,7 +42,9 @@ function renderResults(resultsList: HTMLUListElement) {
 
     const snippet = document.createElement('div');
     snippet.className = 'result-snippet';
-    snippet.textContent = hit.content.slice(0, 140);
+    snippet.textContent = hit.content
+      ? hit.content.slice(0, 140)
+      : (hit.kind === 'page' ? 'Page title match' : '');
 
     li.appendChild(title);
     li.appendChild(snippet);
@@ -69,12 +75,35 @@ async function createSearchUI() {
   input.placeholder = 'Search notes...';
   input.id = 'search-input';
 
+  const controls = document.createElement('div');
+  controls.id = 'search-controls';
+
+  const inputWrap = document.createElement('div');
+  inputWrap.id = 'search-input-wrap';
+  inputWrap.appendChild(input);
+
+  const titleToggle = document.createElement('label');
+  titleToggle.id = 'search-mode-toggle';
+
+  const titleOnlyCheckbox = document.createElement('input');
+  titleOnlyCheckbox.type = 'checkbox';
+  titleOnlyCheckbox.id = 'title-only-toggle';
+
+  const titleToggleText = document.createElement('span');
+  titleToggleText.textContent = 'Title only';
+
+  titleToggle.appendChild(titleOnlyCheckbox);
+  titleToggle.appendChild(titleToggleText);
+
+  controls.appendChild(inputWrap);
+  controls.appendChild(titleToggle);
+
   const resultsList = document.createElement('ul');
   resultsList.id = 'results-list';
 
   let debounceTimer: ReturnType<typeof setTimeout>;
 
-  input.addEventListener('input', () => {
+  const runSearch = () => {
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
       const query = input.value.trim();
@@ -86,10 +115,13 @@ async function createSearchUI() {
         return;
       }
 
-      currentResults = search(query);
+      currentResults = search(query, { titleOnly: titleOnlyCheckbox.checked });
       renderResults(resultsList);
     }, 150);
-  });
+  };
+
+  input.addEventListener('input', runSearch);
+  titleOnlyCheckbox.addEventListener('change', runSearch);
 
   input.addEventListener('keydown', (e) => {
     if (e.key === 'ArrowDown') {
@@ -110,7 +142,7 @@ async function createSearchUI() {
     }
   });
 
-  app.appendChild(input);
+  app.appendChild(controls);
   app.appendChild(resultsList);
 
   setTimeout(() => input.focus(), 100);

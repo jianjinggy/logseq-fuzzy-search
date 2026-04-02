@@ -7,11 +7,41 @@ interface BlockDoc {
   content: string;
 }
 
-let searchIndex: MiniSearch<BlockDoc> | null = null;
+interface PageDoc {
+  id: string;
+  pageName: string;
+  content: string;
+}
+
+let blockSearchIndex: MiniSearch<BlockDoc> | null = null;
+let pageSearchIndex: MiniSearch<PageDoc> | null = null;
 
 interface FlatBlock {
   uuid: string;
   content: string;
+}
+
+const defaultTokenize = MiniSearch.getDefault('tokenize');
+const cjkCharPattern = /[\u3400-\u9FFF\uF900-\uFAFF]/;
+
+function tokenizeWithCjkSupport(text: string): string[] {
+  const tokens: string[] = [];
+
+  for (const token of defaultTokenize(text)) {
+    if (!token) continue;
+    tokens.push(token);
+
+    if (!cjkCharPattern.test(token)) continue;
+
+    const cjkChars = Array.from(token).filter((char) => cjkCharPattern.test(char));
+
+    // Index individual Han characters so suffix matches like "试" can find "测试".
+    if (cjkChars.length > 1) {
+      tokens.push(...cjkChars);
+    }
+  }
+
+  return tokens;
 }
 
 function flattenBlocks(blocks: any[]): FlatBlock[] {
@@ -25,10 +55,11 @@ function flattenBlocks(blocks: any[]): FlatBlock[] {
   return result;
 }
 
-function createIndex(): MiniSearch<BlockDoc> {
+function createBlockIndex(): MiniSearch<BlockDoc> {
   return new MiniSearch<BlockDoc>({
     fields: ['pageName', 'content'],
     storeFields: ['uuid', 'pageName', 'content'],
+    tokenize: tokenizeWithCjkSupport,
     searchOptions: {
       fuzzy: 0.2,
       prefix: true,
@@ -37,11 +68,23 @@ function createIndex(): MiniSearch<BlockDoc> {
   });
 }
 
+function createPageIndex(): MiniSearch<PageDoc> {
+  return new MiniSearch<PageDoc>({
+    fields: ['pageName'],
+    storeFields: ['pageName', 'content'],
+    tokenize: tokenizeWithCjkSupport,
+    searchOptions: {
+      fuzzy: 0.2,
+      prefix: true
+    }
+  });
+}
+
 let indexReady = false;
 let indexPromise: Promise<void> | null = null;
 
 export async function buildIndex(): Promise<void> {
-  if (indexReady && searchIndex) return;
+  if (indexReady && blockSearchIndex && pageSearchIndex) return;
   if (indexPromise) return indexPromise;
 
   indexPromise = doBuildIndex();
@@ -50,12 +93,14 @@ export async function buildIndex(): Promise<void> {
 }
 
 async function doBuildIndex(): Promise<void> {
-  const idx = createIndex();
+  const blockIdx = createBlockIndex();
+  const pageIdx = createPageIndex();
 
   const pages = await logseq.Editor.getAllPages();
   if (!pages) return;
 
-  const docs: BlockDoc[] = [];
+  const blockDocs: BlockDoc[] = [];
+  const pageDocs: PageDoc[] = [];
 
   const BATCH = 10;
   const filtered = pages.filter((p: any) => !p.name.startsWith('__'));
@@ -66,25 +111,35 @@ async function doBuildIndex(): Promise<void> {
       batch.map(async (page: any) => {
         const pageName = page.originalName || page.name;
         const blocks = await logseq.Editor.getPageBlocksTree(page.name);
-        if (!blocks) return [];
-        return flattenBlocks(blocks).map((b) => ({
+        const flatBlocks = blocks ? flattenBlocks(blocks) : [];
+        return {
+          pageDoc: {
+            id: `page-${page.id}`,
+            pageName,
+            content: flatBlocks[0]?.content || ''
+          },
+          blockDocs: flatBlocks.map((b) => ({
           id: `${page.id}-${b.uuid}`,
           uuid: b.uuid,
           pageName,
           content: b.content
-        }));
+          }))
+        };
       })
     );
-    for (const blocks of batchResults) {
-      docs.push(...blocks);
+    for (const result of batchResults) {
+      pageDocs.push(result.pageDoc);
+      blockDocs.push(...result.blockDocs);
     }
   }
 
-  idx.addAll(docs);
-  searchIndex = idx;
+  blockIdx.addAll(blockDocs);
+  pageIdx.addAll(pageDocs);
+  blockSearchIndex = blockIdx;
+  pageSearchIndex = pageIdx;
   indexReady = true;
   const journals = filtered.filter((p: any) => p['journal?']).length;
-  console.log(`[Fuzzy Search] Indexed ${docs.length} blocks across ${filtered.length} pages (${journals} journals)`);
+  console.log(`[Fuzzy Search] Indexed ${blockDocs.length} blocks across ${filtered.length} pages (${journals} journals)`);
 }
 
 export function invalidateIndex(): void {
@@ -92,20 +147,39 @@ export function invalidateIndex(): void {
 }
 
 export function isIndexReady(): boolean {
-  return indexReady && searchIndex !== null;
+  return indexReady && blockSearchIndex !== null && pageSearchIndex !== null;
 }
 
 export interface SearchResult {
+  kind: 'block' | 'page';
   pageName: string;
-  uuid: string;
+  uuid?: string;
   content: string;
   score: number;
 }
 
-export function search(query: string): SearchResult[] {
-  if (!searchIndex || !query.trim()) return [];
+interface SearchOptions {
+  titleOnly?: boolean;
+}
 
-  return searchIndex.search(query).slice(0, 15).map(result => ({
+export function search(query: string, options: SearchOptions = {}): SearchResult[] {
+  if (!query.trim()) return [];
+
+  if (options.titleOnly) {
+    if (!pageSearchIndex) return [];
+
+    return pageSearchIndex.search(query).slice(0, 15).map((result) => ({
+      kind: 'page',
+      pageName: result.pageName,
+      content: result.content,
+      score: result.score
+    }));
+  }
+
+  if (!blockSearchIndex) return [];
+
+  return blockSearchIndex.search(query).slice(0, 15).map((result) => ({
+    kind: 'block',
     pageName: result.pageName,
     uuid: result.uuid,
     content: result.content,

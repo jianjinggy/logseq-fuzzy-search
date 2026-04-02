@@ -88,6 +88,30 @@
     #app input[type="text"]::placeholder {
       color: var(--fs-placeholder);
     }
+    #search-controls {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    #search-input-wrap {
+      flex: 1;
+    }
+    #search-mode-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--fs-muted);
+      font-size: 13px;
+      user-select: none;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+    #search-mode-toggle input[type="checkbox"] {
+      width: 16px;
+      height: 16px;
+      accent-color: var(--fs-accent);
+      cursor: pointer;
+    }
     #results-list {
       list-style: none;
       margin: 10px 0 0 0;
@@ -122,6 +146,15 @@
       text-align: center;
       padding: 20px 10px;
       font-style: italic;
+    }
+    @media (max-width: 640px) {
+      #search-controls {
+        flex-direction: column;
+        align-items: stretch;
+      }
+      #search-mode-toggle {
+        justify-content: flex-end;
+      }
     }
   </style>
 </head>
