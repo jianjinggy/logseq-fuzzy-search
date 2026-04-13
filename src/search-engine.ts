@@ -23,25 +23,35 @@ interface FlatBlock {
 
 const defaultTokenize = MiniSearch.getDefault('tokenize');
 const cjkCharPattern = /[\u3400-\u9FFF\uF900-\uFAFF]/;
+const mixedScriptSegmentPattern = /[A-Za-z0-9]+|[\u3400-\u9FFF\uF900-\uFAFF]+/g;
 
 function tokenizeWithCjkSupport(text: string): string[] {
-  const tokens: string[] = [];
+  const tokens = new Set<string>();
 
   for (const token of defaultTokenize(text)) {
     if (!token) continue;
-    tokens.push(token);
+    tokens.add(token);
+
+    const mixedSegments = token.match(mixedScriptSegmentPattern) || [];
+    for (const segment of mixedSegments) {
+      if (!segment || segment === token) continue;
+      tokens.add(segment);
+    }
 
     if (!cjkCharPattern.test(token)) continue;
 
-    const cjkChars = Array.from(token).filter((char) => cjkCharPattern.test(char));
+    const cjkChars = mixedSegments
+      .filter((segment) => cjkCharPattern.test(segment))
+      .flatMap((segment) => Array.from(segment))
+      .filter((char) => cjkCharPattern.test(char));
 
     // Index individual Han characters so suffix matches like "试" can find "测试".
     if (cjkChars.length > 1) {
-      tokens.push(...cjkChars);
+      cjkChars.forEach((char) => tokens.add(char));
     }
   }
 
-  return tokens;
+  return Array.from(tokens);
 }
 
 function flattenBlocks(blocks: any[]): FlatBlock[] {
